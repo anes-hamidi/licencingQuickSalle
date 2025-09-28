@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class License {
-  final String? id;
+  final String id;
   final String name;
   final String email;
   final String phone;
@@ -10,10 +10,10 @@ class License {
   final DateTime createdAt;
   final DateTime expiryDate;
   final bool isActive;
-  final String? assignedTo; // 🔑 userId who owns the license
+  final String assignedTo; // userId who owns the license
 
   License({
-    this.id,
+    required this.id,
     required this.name,
     required this.email,
     required this.phone,
@@ -22,20 +22,22 @@ class License {
     required this.createdAt,
     required this.expiryDate,
     required this.isActive,
-    this.assignedTo,
+    required this.assignedTo,
   });
 
-  factory License.fromJson(Map<String, dynamic> json, String id) {
+  factory License.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data()!;
     return License(
-      id: id,
-      name: json['name'] ?? '',
-      email: json['email'] ?? '',
-      phone: json['phone'] ?? '',
-      type: json['type'] ?? '',
-      licenseKey: json['licenseKey'] ?? '',
-      createdAt: (json['createdAt'] as Timestamp).toDate(),
-      expiryDate: (json['expiryDate'] as Timestamp).toDate(),    isActive: json['isActive'],
-      assignedTo: json['assignedTo'], // 🔑
+      id: doc.id,
+      name: data['name'] ?? '',
+      email: data['email'] ?? '',
+      phone: data['phone'] ?? '',
+      type: data['type'] ?? '',
+      licenseKey: data['licenseKey'] ?? '',
+      createdAt: (data['createdAt'] as Timestamp).toDate(),
+      expiryDate: (data['expiryDate'] as Timestamp).toDate(),
+      isActive: data['isActive'] ?? false,
+      assignedTo: data['assignedTo'] ?? '',
     );
   }
 
@@ -49,16 +51,16 @@ class License {
       'createdAt': createdAt,
       'expiryDate': expiryDate,
       'isActive': isActive,
-      'assignedTo': assignedTo, // 🔑
+      'assignedTo': assignedTo,
     };
   }
 }
-// models/license_status.dart
+
 enum LicenseStatus {
-  activeLicense,   // ✅ Paid license and valid
-  trialActive,     // ⏳ Trial running
-  expired,         // ❌ License or trial expired
-  none,            // 🚫 No license or trial
+  activeLicense,
+  trialActive,
+  expired,
+  none,
 }
 
 class LicenseStatusResult {

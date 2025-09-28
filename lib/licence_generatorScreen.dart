@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:myapp/licence_service.dart';
 import 'package:myapp/license.dart';
 
 class LicenseScreen extends StatefulWidget {
@@ -13,7 +12,6 @@ class LicenseScreen extends StatefulWidget {
 
 class _LicenseScreenState extends State<LicenseScreen> {
   final _searchController = TextEditingController();
-  final _licenseService = LicenseServices();
 
   License? _generatedLicense;
   bool _isGenerating = false;
@@ -25,7 +23,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
   List<Map<String, dynamic>> _users = [];
   List<Map<String, dynamic>> _filteredUsers = [];
 
-  Map<String, dynamic>? _userLicense;
+  License? _userLicense;
 
   final List<String> _licenseTypes = [
     "1 Month",
@@ -56,17 +54,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
     }
   }
 
-  void _filterUsers(String query) {
-    setState(() {
-      _filteredUsers = _users.where((user) {
-        final name = user['name']?.toString().toLowerCase() ?? "";
-        final email = user['email']?.toString().toLowerCase() ?? "";
-        return name.contains(query.toLowerCase()) ||
-            email.contains(query.toLowerCase());
-      }).toList();
-    });
-  }
-
+ 
   Future<void> _checkUserLicense(String userId) async {
     setState(() {
       _isCheckingLicense = true;
@@ -76,12 +64,12 @@ class _LicenseScreenState extends State<LicenseScreen> {
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection("licenses")
-          .where("userId", isEqualTo: userId)
+          .where("assignedTo", isEqualTo: userId)
           .limit(1)
           .get();
 
       if (snapshot.docs.isNotEmpty) {
-        _userLicense = snapshot.docs.first.data();
+        _userLicense = License.fromFirestore(snapshot.docs.first);
       }
     } catch (e) {
       debugPrint("Error checking license: $e");
@@ -89,19 +77,36 @@ class _LicenseScreenState extends State<LicenseScreen> {
       setState(() => _isCheckingLicense = false);
     }
   }
+Future<void> _generateLicense({bool isUpdate = false}) async {
+  if (_selectedUserId == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("⚠️ Please select a user")),
+    );
+    return;
+  }
 
-  Future<void> _generateLicense() async {
-    if (_selectedUserId == null) {
+  setState(() => _isGenerating = true);
+
+  try {
+    final selectedUser =
+        _users.firstWhere((user) => user['id'] == _selectedUserId);
+
+    final docRef =
+        FirebaseFirestore.instance.collection("licenses").doc(_selectedUserId);
+
+    final existingDoc = await docRef.get();
+
+    if (existingDoc.exists && !isUpdate) {
+      // ⚠️ Block if trying to generate a new license when one already exists
+      setState(() => _isGenerating = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("⚠️ Please select a user")),
+        const SnackBar(
+          content: Text("⚠️ This user already has a license."),
+          backgroundColor: Colors.orange,
+        ),
       );
       return;
     }
-
-    setState(() => _isGenerating = true);
-
-    final selectedUser =
-        _users.firstWhere((user) => user['id'] == _selectedUserId);
 
     final licenseKey = DateTime.now().millisecondsSinceEpoch.toString();
     final expiryDate = _selectedType == "1 Month"
@@ -113,7 +118,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
                 : DateTime.now().add(const Duration(days: 365 * 100));
 
     final license = License(
-      id: licenseKey,
+      id: _selectedUserId!, // license id = selected user id
       name: selectedUser['name'],
       email: selectedUser['email'],
       phone: selectedUser['phone'],
@@ -125,15 +130,32 @@ class _LicenseScreenState extends State<LicenseScreen> {
       assignedTo: _selectedUserId!,
     );
 
-    await FirebaseFirestore.instance.collection("licenses").doc(licenseKey).set(license.toJson());
-
-    await _licenseService.saveLicenseLocally(licenseKey);
+    // 🔹 Save/Update license
+    await docRef.set(license.toJson());
 
     setState(() {
       _isGenerating = false;
       _generatedLicense = license;
+      _userLicense = license; // update UI
     });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(isUpdate
+            ? "🔄 License updated successfully"
+            : "✅ License generated successfully"),
+        backgroundColor: Colors.green,
+      ),
+    );
+  } catch (e) {
+    debugPrint("Error generating/updating license: $e");
+    setState(() => _isGenerating = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("❌ Error: $e")),
+    );
   }
+}
+
 
   @override
   void dispose() {
@@ -159,23 +181,13 @@ class _LicenseScreenState extends State<LicenseScreen> {
             const SizedBox(height: 20),
 
             // 🔎 Search user
-            TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: "Search User",
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.search),
-              ),
-              onChanged: _filterUsers,
-            ),
-            const SizedBox(height: 20),
-
+          
             // 👤 User dropdown
             if (_isLoading)
               const Center(child: CircularProgressIndicator())
             else
               DropdownButtonFormField<String>(
-                initialValue: _selectedUserId,
+                value: _selectedUserId,
                 items: _filteredUsers.map((user) {
                   return DropdownMenuItem<String>(
                     value: user['id'],
@@ -209,11 +221,11 @@ class _LicenseScreenState extends State<LicenseScreen> {
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Key: ${_userLicense!['licenseKey']}"),
-                        Text("Type: ${_userLicense!['type']}"),
-                        Text("Status: ${_userLicense!['isActive'] == true ? "✅ Active" : "❌ Expired"}"),
-                        if (_userLicense!['expiryDate'] != null)
-                          Text("Expires: ${(_userLicense!['expiryDate'] as Timestamp).toDate()}"),
+                        Text("Key: ${_userLicense!.licenseKey}"),
+                        Text("Type: ${_userLicense!.type}"),
+                        Text(
+                            "Status: ${_userLicense!.isActive ? "✅ Active" : "❌ Expired"}"),
+                          Text("Expires: ${_userLicense!.expiryDate}"),
                       ],
                     ),
                   ),
@@ -226,7 +238,7 @@ class _LicenseScreenState extends State<LicenseScreen> {
 
             // ⏳ License Type
             DropdownButtonFormField<String>(
-              initialValue: _selectedType,
+              value: _selectedType,
               items: _licenseTypes
                   .map((type) =>
                       DropdownMenuItem(value: type, child: Text(type)))
@@ -241,16 +253,39 @@ class _LicenseScreenState extends State<LicenseScreen> {
             const SizedBox(height: 20),
 
             // 🚀 Generate button
-            ElevatedButton.icon(
-              onPressed: _isGenerating ? null : _generateLicense,
-              icon: _isGenerating
-                  ? const SizedBox(
-                      width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.vpn_key),
-              label: Text(_isGenerating ? "Generating..." : "Generate License"),
-              style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
-            ),
+         // 🚀 Generate / Update button
+if (_userLicense == null)
+  ElevatedButton.icon(
+    onPressed: _isGenerating ? null : () => _generateLicense(),
+    icon: _isGenerating
+        ? const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.vpn_key),
+    label: Text(_isGenerating ? "Generating..." : "Generate License"),
+    style: ElevatedButton.styleFrom(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+    ),
+  )
+else
+  ElevatedButton.icon(
+    onPressed: _isGenerating ? null : () => _generateLicense(isUpdate: true),
+    icon: _isGenerating
+        ? const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : const Icon(Icons.update),
+    label: Text(_isGenerating ? "Updating..." : "Update License"),
+    style: ElevatedButton.styleFrom(
+      backgroundColor: Colors.orange,
+      padding: const EdgeInsets.symmetric(vertical: 14),
+    ),
+  ),
+
 
             const SizedBox(height: 30),
 
